@@ -8,8 +8,7 @@ using Ipopt
 using Glob
 using Base.Filesystem
 
-include("OptMaps.jl")
-using .OptMaps
+using OptMapsNLopt
 
 function solve_model(solver, model_log, solver_options=Dict())
     model = Model(solver)
@@ -60,7 +59,7 @@ function solve_model(solver, model_log, solver_options=Dict())
     total_cost = @expression(model, total_cost, sum(cost_per_food[f] *
                                                     amt_per_food[f] for f in
                                                         1:n_foods))
-    @objective(model, Min, total_cost)
+    @NLobjective(model, Min, total_cost)
 
     ###############################################################
     #constraints: fulfill min nutrition demand (demand_per_rsc)
@@ -75,7 +74,7 @@ function solve_model(solver, model_log, solver_options=Dict())
     end
 
     #jump expressions
-    @constraint(model, dmd[r = 1:n_resources],
+    @NLconstraint(model, dmd[r = 1:n_resources],
                 sum((amt_per_food[f]*rsc_per_food[r,f]  for f in 1:n_foods)) >=
                 demand_per_rsc[r])
 
@@ -86,7 +85,7 @@ function solve_model(solver, model_log, solver_options=Dict())
 
         ###############################################################
         #solve model
-        elapsed_time = @elapsed optimize!(model)
+        elapsed_time = @elapsed JuMP.optimize!(model)
 
         println(f, "-----------------------------------------------")
         println(f, "Elapsed time: $elapsed_time")
@@ -120,26 +119,18 @@ end
 #or integer
 variable_domains = [(0.0,4.0), (0.0,4.0), (0.0,4.0), (0.0,4.0)]
 
-optimizers = [GLPK.Optimizer, Ipopt.Optimizer, Cbc.Optimizer]
-opt_names = ["glpk", "ipopt", "cbc"]
-
-for (opt, opt_name) in zip(optimizers, opt_names)
-    objective_f, constraints_f, variable_names, constraint_names,
-    starting_point, solution_point, obj_val = solve_model(opt,
-                                       "test_optmap_$(opt_name).log")
-end
-
-opt = Clp.Optimizer
-opt_name = "clp"
+opt_name = "nlopt"
+opt = NLopt.Optimizer
 
 objective_f, constraints_f, variable_names, constraint_names, starting_point,
-solution_point, obj_val = solve_model(opt, "test_optmap_$(opt_name).log")
+solution_point, obj_val = solve_model(opt, "test_optmap_$(opt_name).log",
+                                      Dict("algorithm" => :LD_MMA))
 
 path_to_solution = zeros(Float64, length(variable_domains), 2)
 path_to_solution[:,1] = starting_point
 path_to_solution[:,2] = solution_point
 
-O = OptMap(variable_names, variable_domains, objective_f;
+O = OptMapNLopt(variable_names, variable_domains, objective_f;
            constraint_names=constraint_names, constraints_f=constraints_f,
            verbose=true)
 create_map!(O)
@@ -152,19 +143,3 @@ test_files = glob("test_optmap*.*", ".")
 #Precompile Optim
 f(x) = (1.0 - x[1])^2 + 100.0 * (x[2] - x[1]^2)^2
 initial_x = [0.0, 0.0]
-
-solvers = [NelderMead, LBFGS, GradientDescent, SimulatedAnnealing,
-           ConjugateGradient, Newton]
-
-for solver in solvers
-    result = optimize(f, initial_x, solver(), Optim.Options(store_trace = true,
-                                                            extended_trace=true,
-                                                            iterations=50000))
-
-    if solver == NelderMead
-        tr = Optim.trace(result)
-        points = [state.metadata["centroid"] for state in tr]
-    else
-        points = Optim.x_trace(result)
-    end
-end
